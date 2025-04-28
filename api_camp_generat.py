@@ -2,8 +2,9 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
-import pandas as pd
 import numpy as np
+import pandas as pd
+import io
 import plotly.graph_objects as go
 
 app = FastAPI()
@@ -25,7 +26,7 @@ async def upload_api(file: UploadFile = File(...)):
     try:
         # Citim fișierul primit
         contents = await file.read()
-        df = pd.read_excel(pd.io.common.BytesIO(contents))
+        df = pd.read_excel(io.BytesIO(contents))
 
         required_cols = {'X', 'Y', 'Z', 'Value'}
         if not required_cols.issubset(df.columns):
