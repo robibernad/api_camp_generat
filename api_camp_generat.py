@@ -1,5 +1,5 @@
 # ✅ FASTAPI - API pentru generarea unui plot 3D interactiv cu posibilitate de export PNG
-drom fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
