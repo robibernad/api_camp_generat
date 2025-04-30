@@ -1,4 +1,3 @@
-# ✅ FASTAPI - API pentru generarea unui plot 3D și 2D (cross section)
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +10,7 @@ import plotly.graph_objects as go
 
 app = FastAPI()
 
+# CORS pentru acces din frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,18 +22,18 @@ app.add_middleware(
 UPLOAD_FOLDER = os.path.join("static", "plots")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# 🔵 Ruta pentru 3D
+# === RUTA 3D ===
 @app.post("/api/upload")
 async def upload_api(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents))
+        df.columns = [col.lower() for col in df.columns]
 
         required_cols = {'x', 'y', 'z', 'value'}
-        if not required_cols.issubset(set(col.lower() for col in df.columns)):
+        if not required_cols.issubset(df.columns):
             return JSONResponse({"error": "Missing columns (x, y, z, value)"}, status_code=400)
 
-        df.columns = [col.lower() for col in df.columns]
         x = np.unique(df['x'])
         y = np.unique(df['y'])
         z = np.unique(df['z'])
@@ -81,7 +81,7 @@ async def upload_api(file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-# 🔵 Ruta pentru 2D
+# === RUTA 2D (Cross-Section) ===
 @app.post("/api/upload-2d")
 async def upload_2d_api(
     file: UploadFile = File(...),
@@ -94,35 +94,36 @@ async def upload_2d_api(
         df = pd.read_excel(io.BytesIO(contents))
         df.columns = [col.lower() for col in df.columns]
 
-        # Convertim inputul
         x = x.strip()
         y = y.strip()
         z = z.strip()
 
-        # Validare: trebuie exact două coordonate completate
         filled = [(name, val) for name, val in zip(["x", "y", "z"], [x, y, z]) if val != ""]
         if len(filled) != 2:
-            return JSONResponse({"error": "Exactly two coordinates must be filled."}, status_code=400)
+            return JSONResponse({"error": "Please fill in exactly two coordinates."}, status_code=400)
 
         filters = {}
         for axis, val in filled:
             try:
                 filters[axis] = float(val)
             except ValueError:
-                return JSONResponse({"error": f"{axis.upper()} must be numeric."}, status_code=400)
+                return JSONResponse({"error": f"{axis.upper()} must be a number."}, status_code=400)
 
-        # Filtrăm dataframe-ul
+        # Verificăm dacă valorile sunt în interval
+        for axis, val in filters.items():
+            if val > df[axis].max() or val < df[axis].min():
+                return JSONResponse({"error": f"{axis.upper()}={val} is out of range."}, status_code=400)
+
         for axis, val in filters.items():
             df = df[df[axis] == val]
 
         if df.empty:
-            return JSONResponse({"error": "No data found for the selected section."}, status_code=404)
+            return JSONResponse({"error": "No data found for the selected coordinates."}, status_code=404)
 
-        # Determinăm ce axă a rămas variabilă
         remaining_axis = [axis for axis in ["x", "y", "z"] if axis not in filters][0]
-
         df_sorted = df.sort_values(by=[remaining_axis])
 
+        fixed_labels = ", ".join([f"{k} = {v}" for k, v in filters.items()])
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=df_sorted[remaining_axis],
@@ -131,10 +132,10 @@ async def upload_2d_api(
         ))
 
         fig.update_layout(
-            title=f'Magnetic Field along {remaining_axis.upper()}',
+            title=f'Magnetic Field along {remaining_axis.upper()} ({fixed_labels})',
             xaxis_title=f'{remaining_axis.upper()} (mm)',
             yaxis_title='Magnetic Field Value (T)',
-            margin=dict(l=40, r=40, t=40, b=40),
+            margin=dict(l=40, r=40, t=60, b=40),
             autosize=True
         )
 
@@ -146,5 +147,5 @@ async def upload_2d_api(
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-# Static files serving
+# Servește fișierele statice
 app.mount("/static", StaticFiles(directory="static"), name="static")
