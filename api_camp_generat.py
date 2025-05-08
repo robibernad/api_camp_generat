@@ -10,7 +10,6 @@ import plotly.graph_objects as go
 
 app = FastAPI()
 
-# CORS pentru acces din frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,7 +21,6 @@ app.add_middleware(
 UPLOAD_FOLDER = os.path.join("static", "plots")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# === RUTA 3D ===
 @app.post("/api/upload")
 async def upload_api(file: UploadFile = File(...)):
     try:
@@ -81,7 +79,6 @@ async def upload_api(file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-# === RUTA 2D (Cross-Section) ===
 @app.post("/api/upload-2d")
 async def upload_2d_api(
     file: UploadFile = File(...),
@@ -109,7 +106,6 @@ async def upload_2d_api(
             except ValueError:
                 return JSONResponse({"error": f"{axis.upper()} must be a number."}, status_code=400)
 
-        # Verificăm dacă valorile sunt în interval
         for axis, val in filters.items():
             if val > df[axis].max() or val < df[axis].min():
                 return JSONResponse({"error": f"{axis.upper()}={val} is out of range."}, status_code=400)
@@ -139,7 +135,6 @@ async def upload_2d_api(
             autosize=True
         )
 
-        # ... după generarea graficului
         html_path = os.path.join(UPLOAD_FOLDER, "plot2d.html")
         fig.write_html(html_path, include_plotlyjs='cdn', config={"responsive": True, "displaylogo": False, "modeBarButtonsToAdd": ["toImage"]})
         
@@ -176,7 +171,6 @@ async def z_section_api(file: UploadFile = File(...), z: str = Form(...)):
         if df_z.empty:
             return JSONResponse({"error": "No data found for this Z"}, status_code=404)
 
-        # Sort for clean heatmap
         df_z = df_z.sort_values(by=["x", "y"])
 
         fig = go.Figure(data=go.Contour(
@@ -210,5 +204,4 @@ async def z_section_api(file: UploadFile = File(...), z: str = Form(...)):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-# Servește fișierele statice
 app.mount("/static", StaticFiles(directory="static"), name="static")
