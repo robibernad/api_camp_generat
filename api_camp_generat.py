@@ -139,13 +139,22 @@ async def upload_2d_api(
             autosize=True
         )
 
+        # ... după generarea graficului
         html_path = os.path.join(UPLOAD_FOLDER, "plot2d.html")
         fig.write_html(html_path, include_plotlyjs='cdn', config={"responsive": True, "displaylogo": False, "modeBarButtonsToAdd": ["toImage"]})
+        
+        table_data = df_sorted[["x", "y", "z", "value"]].to_dict(orient="records")
+        
+        return {
+            "url": "/static/plots/plot2d.html",
+            "table": table_data
+        }
 
-        return {"url": "/static/plots/plot2d.html"}
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    
+
 
 # Servește fișierele statice
 app.mount("/static", StaticFiles(directory="static"), name="static")
