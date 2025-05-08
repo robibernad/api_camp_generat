@@ -154,6 +154,60 @@ async def upload_2d_api(
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
     
+@app.post("/api/z-section")
+async def z_section_api(file: UploadFile = File(...), z: str = Form(...)):
+    try:
+        contents = await file.read()
+        df = pd.read_excel(io.BytesIO(contents))
+        df.columns = [col.lower() for col in df.columns]
+
+        if 'x' not in df.columns or 'y' not in df.columns or 'z' not in df.columns or 'value' not in df.columns:
+            return JSONResponse({"error": "Missing required columns"}, status_code=400)
+
+        try:
+            z_val = float(z.strip())
+        except ValueError:
+            return JSONResponse({"error": "Z must be a number"}, status_code=400)
+
+        if z_val < df["z"].min() or z_val > df["z"].max():
+            return JSONResponse({"error": f"Z={z_val} is out of range."}, status_code=400)
+
+        df_z = df[df["z"] == z_val]
+        if df_z.empty:
+            return JSONResponse({"error": "No data found for this Z"}, status_code=404)
+
+        # Sort for clean heatmap
+        df_z = df_z.sort_values(by=["x", "y"])
+
+        fig = go.Figure(data=go.Contour(
+            x=np.sort(df_z["x"].unique()),
+            y=np.sort(df_z["y"].unique()),
+            z=df_z.pivot(index='y', columns='x', values='value').values,
+            colorscale='Jet',
+            contours_coloring='heatmap',
+            showscale=True
+        ))
+
+        fig.update_layout(
+            title=f"Z Section at Z = {z_val}",
+            xaxis_title="X (mm)",
+            yaxis_title="Y (mm)",
+            margin=dict(l=40, r=40, t=60, b=40),
+            autosize=True
+        )
+
+        html_path = os.path.join(UPLOAD_FOLDER, "z_section.html")
+        fig.write_html(html_path, include_plotlyjs='cdn', config={"responsive": True})
+
+        table_data = df_z[["x", "y", "z", "value"]].to_dict(orient="records")
+        return {
+            "url": "/static/plots/z_section.html",
+            "table": table_data,
+            "z": z_val
+        }
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # Servește fișierele statice
