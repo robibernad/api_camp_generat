@@ -72,7 +72,7 @@ async def upload_api(file: UploadFile = File(...)):
         )
 
         html_path = os.path.join(UPLOAD_FOLDER, "plot.html")
-        fig.write_html(html_path, include_plotlyjs='cdn', config={"responsive": True, "displaylogo": False, "modeBarButtonsToAdd": ["toImage"]})
+        fig.write_html(html_path, include_plotlyjs='cdn', config={"responsive": True})
 
         return {"url": "/static/plots/plot.html"}
 
@@ -80,22 +80,13 @@ async def upload_api(file: UploadFile = File(...)):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @app.post("/api/upload-2d")
-async def upload_2d_api(
-    file: UploadFile = File(...),
-    x: str = Form(""),
-    y: str = Form(""),
-    z: str = Form("")
-):
+async def upload_2d_api(file: UploadFile = File(...), x: str = Form(""), y: str = Form(""), z: str = Form("")):
     try:
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents))
         df.columns = [col.lower() for col in df.columns]
 
-        x = x.strip()
-        y = y.strip()
-        z = z.strip()
-
-        filled = [(name, val) for name, val in zip(["x", "y", "z"], [x, y, z]) if val != ""]
+        filled = [(name, val.strip()) for name, val in zip(["x", "y", "z"], [x, y, z]) if val.strip() != ""]
         if len(filled) != 2:
             return JSONResponse({"error": "Please fill in exactly two coordinates."}, status_code=400)
 
@@ -121,11 +112,7 @@ async def upload_2d_api(
 
         fixed_labels = ", ".join([f"{k} = {v}" for k, v in filters.items()])
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_sorted[remaining_axis],
-            y=df_sorted['value'],
-            mode='lines+markers'
-        ))
+        fig.add_trace(go.Scatter(x=df_sorted[remaining_axis], y=df_sorted['value'], mode='lines+markers'))
 
         fig.update_layout(
             title=f'Magnetic Field along {remaining_axis.upper()} ({fixed_labels})',
@@ -136,72 +123,64 @@ async def upload_2d_api(
         )
 
         html_path = os.path.join(UPLOAD_FOLDER, "plot2d.html")
-        fig.write_html(html_path, include_plotlyjs='cdn', config={"responsive": True, "displaylogo": False, "modeBarButtonsToAdd": ["toImage"]})
-        
-        table_data = df_sorted[["x", "y", "z", "value"]].to_dict(orient="records")
-        
-        return {
-            "url": "/static/plots/plot2d.html",
-            "table": table_data
-        }
+        fig.write_html(html_path, include_plotlyjs='cdn', config={"responsive": True})
 
+        table_data = df_sorted[["x", "y", "z", "value"]].to_dict(orient="records")
+        return {"url": "/static/plots/plot2d.html", "table": table_data}
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-    
-@app.post("/api/z-section")
-async def z_section_api(file: UploadFile = File(...), z: str = Form(...)):
+
+@app.post("/api/section-1d")
+async def section_1d(file: UploadFile = File(...), axis: str = Form(...), value: str = Form(...)):
     try:
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents))
         df.columns = [col.lower() for col in df.columns]
 
-        if 'x' not in df.columns or 'y' not in df.columns or 'z' not in df.columns or 'value' not in df.columns:
-            return JSONResponse({"error": "Missing required columns"}, status_code=400)
+        if axis not in ["x", "y", "z"]:
+            return JSONResponse({"error": "Invalid axis. Must be one of x, y, z."}, status_code=400)
 
         try:
-            z_val = float(z.strip())
+            value = float(value.strip())
         except ValueError:
-            return JSONResponse({"error": "Z must be a number"}, status_code=400)
+            return JSONResponse({"error": f"{axis.upper()} must be a number."}, status_code=400)
 
-        if z_val < df["z"].min() or z_val > df["z"].max():
-            return JSONResponse({"error": f"Z={z_val} is out of range."}, status_code=400)
+        if value < df[axis].min() or value > df[axis].max():
+            return JSONResponse({"error": f"{axis.upper()}={value} is out of range."}, status_code=400)
 
-        df_z = df[df["z"] == z_val]
-        if df_z.empty:
-            return JSONResponse({"error": "No data found for this Z"}, status_code=404)
+        df_filtered = df[df[axis] == value]
+        if df_filtered.empty:
+            return JSONResponse({"error": f"No data found for {axis}={value}"}, status_code=404)
 
-        df_z = df_z.sort_values(by=["x", "y"])
+        axes = [a for a in ["x", "y", "z"] if a != axis]
+        pivot_table = df_filtered.pivot(index=axes[1], columns=axes[0], values="value")
 
         fig = go.Figure(data=go.Contour(
-            x=np.sort(df_z["x"].unique()),
-            y=np.sort(df_z["y"].unique()),
-            z=df_z.pivot(index='y', columns='x', values='value').values,
+            x=np.sort(df_filtered[axes[0]].unique()),
+            y=np.sort(df_filtered[axes[1]].unique()),
+            z=pivot_table.values,
             colorscale='Jet',
             contours_coloring='heatmap',
             showscale=True
         ))
 
         fig.update_layout(
-            title=f"Z Section at Z = {z_val}",
-            xaxis_title="X (mm)",
-            yaxis_title="Y (mm)",
+            title=f"Section at {axis.upper()} = {value}",
+            xaxis_title=f"{axes[0].upper()} (mm)",
+            yaxis_title=f"{axes[1].upper()} (mm)",
             margin=dict(l=40, r=40, t=60, b=40),
             autosize=True
         )
 
-        html_path = os.path.join(UPLOAD_FOLDER, "z_section.html")
+        filename = f"section_{axis}{int(value)}.html"
+        html_path = os.path.join(UPLOAD_FOLDER, filename)
         fig.write_html(html_path, include_plotlyjs='cdn', config={"responsive": True})
 
-        table_data = df_z[["x", "y", "z", "value"]].to_dict(orient="records")
-        return {
-            "url": "/static/plots/z_section.html",
-            "table": table_data,
-            "z": z_val
-        }
+        table_data = df_filtered[["x", "y", "z", "value"]].to_dict(orient="records")
+        return {"url": f"/static/plots/{filename}", "table": table_data}
 
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
