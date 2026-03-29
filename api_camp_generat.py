@@ -21,16 +21,42 @@ app.add_middleware(
 UPLOAD_FOLDER = os.path.join("static", "plots")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+FLOAT_TOLERANCE = 1e-6
+
+
+def read_dataframe(contents: bytes) -> pd.DataFrame:
+    """Read Excel file, auto-detecting whether a header row is present."""
+    df = pd.read_excel(io.BytesIO(contents))
+    df.columns = [str(col).lower().strip() for col in df.columns]
+
+    required_cols = {'x', 'y', 'z', 'value'}
+    if not required_cols.issubset(df.columns):
+        # No proper header — re-read without header and assign column names
+        df = pd.read_excel(io.BytesIO(contents), header=None)
+        if len(df.columns) == 4:
+            df.columns = ['x', 'y', 'z', 'value']
+        else:
+            raise ValueError(
+                f"Expected 4 columns (x, y, z, value) but found {len(df.columns)}. "
+                "Please ensure the file has columns: x, y, z, value."
+            )
+
+    for col in ['x', 'y', 'z', 'value']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    return df
+
+
+def filter_by_value(df: pd.DataFrame, axis: str, val: float) -> pd.DataFrame:
+    """Filter rows where axis == val, using tolerance to handle float precision."""
+    return df[(df[axis] - val).abs() <= FLOAT_TOLERANCE]
+
+
 @app.post("/api/upload")
 async def upload_api(file: UploadFile = File(...)):
     try:
         contents = await file.read()
-        df = pd.read_excel(io.BytesIO(contents))
-        df.columns = [col.lower() for col in df.columns]
-
-        required_cols = {'x', 'y', 'z', 'value'}
-        if not required_cols.issubset(df.columns):
-            return JSONResponse({"error": "Missing columns (x, y, z, value)"}, status_code=400)
+        df = read_dataframe(contents)
 
         x = np.unique(df['x'])
         y = np.unique(df['y'])
@@ -47,13 +73,16 @@ async def upload_api(file: UploadFile = File(...)):
         if np.isnan(value_cube).any():
             value_cube = np.where(np.isnan(value_cube), np.nanmean(value_cube), value_cube)
 
+        val_min = float(np.nanmin(value_cube))
+        val_max = float(np.nanmax(value_cube))
+
         fig = go.Figure(data=go.Volume(
             x=X.flatten(),
             y=Y.flatten(),
             z=Z.flatten(),
             value=value_cube.flatten(),
-            isomin=0.05,
-            isomax=np.max(value_cube),
+            isomin=val_min,
+            isomax=val_max,
             opacity=0.1,
             surface_count=25,
             colorscale='Jet',
@@ -76,6 +105,8 @@ async def upload_api(file: UploadFile = File(...)):
 
         return {"url": "/static/plots/plot.html"}
 
+    except ValueError as e:
+        return JSONResponse(content={"error": str(e)}, status_code=400)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
@@ -83,8 +114,7 @@ async def upload_api(file: UploadFile = File(...)):
 async def upload_2d_api(file: UploadFile = File(...), x: str = Form(""), y: str = Form(""), z: str = Form("")):
     try:
         contents = await file.read()
-        df = pd.read_excel(io.BytesIO(contents))
-        df.columns = [col.lower() for col in df.columns]
+        df = read_dataframe(contents)
 
         filled = [(name, val.strip()) for name, val in zip(["x", "y", "z"], [x, y, z]) if val.strip() != ""]
         if len(filled) != 2:
@@ -98,17 +128,18 @@ async def upload_2d_api(file: UploadFile = File(...), x: str = Form(""), y: str 
                 return JSONResponse({"error": f"{axis.upper()} must be a number."}, status_code=400)
 
         for axis, val in filters.items():
-            if val > df[axis].max() or val < df[axis].min():
-                return JSONResponse({"error": f"{axis.upper()}={val} is out of range."}, status_code=400)
+            if val > df[axis].max() + FLOAT_TOLERANCE or val < df[axis].min() - FLOAT_TOLERANCE:
+                return JSONResponse({"error": f"{axis.upper()}={val} is out of range [{df[axis].min()}, {df[axis].max()}]."}, status_code=400)
 
+        filtered_df = df.copy()
         for axis, val in filters.items():
-            df = df[df[axis] == val]
+            filtered_df = filter_by_value(filtered_df, axis, val)
 
-        if df.empty:
-            return JSONResponse({"error": "No data found for the selected coordinates."}, status_code=404)
+        if filtered_df.empty:
+            return JSONResponse({"error": "No data found for the selected coordinates. Check that the values exist in the dataset."}, status_code=404)
 
         remaining_axis = [axis for axis in ["x", "y", "z"] if axis not in filters][0]
-        df_sorted = df.sort_values(by=[remaining_axis])
+        df_sorted = filtered_df.sort_values(by=[remaining_axis])
 
         fixed_labels = ", ".join([f"{k} = {v}" for k, v in filters.items()])
         fig = go.Figure()
@@ -128,6 +159,8 @@ async def upload_2d_api(file: UploadFile = File(...), x: str = Form(""), y: str 
         table_data = df_sorted[["x", "y", "z", "value"]].to_dict(orient="records")
         return {"url": "/static/plots/plot2d.html", "table": table_data}
 
+    except ValueError as e:
+        return JSONResponse(content={"error": str(e)}, status_code=400)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
@@ -135,8 +168,7 @@ async def upload_2d_api(file: UploadFile = File(...), x: str = Form(""), y: str 
 async def section_1d(file: UploadFile = File(...), axis: str = Form(...), value: str = Form(...)):
     try:
         contents = await file.read()
-        df = pd.read_excel(io.BytesIO(contents))
-        df.columns = [col.lower() for col in df.columns]
+        df = read_dataframe(contents)
 
         if axis not in ["x", "y", "z"]:
             return JSONResponse({"error": "Invalid axis. Must be one of x, y, z."}, status_code=400)
@@ -146,15 +178,15 @@ async def section_1d(file: UploadFile = File(...), axis: str = Form(...), value:
         except ValueError:
             return JSONResponse({"error": f"{axis.upper()} must be a number."}, status_code=400)
 
-        if value < df[axis].min() or value > df[axis].max():
-            return JSONResponse({"error": f"{axis.upper()}={value} is out of range."}, status_code=400)
+        if value < df[axis].min() - FLOAT_TOLERANCE or value > df[axis].max() + FLOAT_TOLERANCE:
+            return JSONResponse({"error": f"{axis.upper()}={value} is out of range [{df[axis].min()}, {df[axis].max()}]."}, status_code=400)
 
-        df_filtered = df[df[axis] == value]
+        df_filtered = filter_by_value(df, axis, value)
         if df_filtered.empty:
-            return JSONResponse({"error": f"No data found for {axis}={value}"}, status_code=404)
+            return JSONResponse({"error": f"No data found for {axis}={value}. Check that this value exists in the dataset."}, status_code=404)
 
         axes = [a for a in ["x", "y", "z"] if a != axis]
-        pivot_table = df_filtered.pivot(index=axes[1], columns=axes[0], values="value")
+        pivot_table = df_filtered.pivot_table(index=axes[1], columns=axes[0], values="value", aggfunc="mean")
 
         fig = go.Figure(data=go.Contour(
             x=np.sort(df_filtered[axes[0]].unique()),
@@ -180,7 +212,9 @@ async def section_1d(file: UploadFile = File(...), axis: str = Form(...), value:
         table_data = df_filtered[["x", "y", "z", "value"]].to_dict(orient="records")
         return {"url": f"/static/plots/{filename}", "table": table_data}
 
+    except ValueError as e:
+        return JSONResponse(content={"error": str(e)}, status_code=400)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
