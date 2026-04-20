@@ -152,7 +152,9 @@ async def upload_api(file: UploadFile = File(...)):
         contents = await file.read()
         df = read_dataframe(contents, file.filename or "")
 
-        has_region = 'region' in df.columns and df['region'].notna().any()
+        # NB: bool(...) — pandas/numpy returns numpy.bool_, which Plotly's strict
+        # layout validator rejects for the showlegend property.
+        has_region = bool('region' in df.columns and df['region'].notna().any())
 
         x, y, z, X, Y, Z, full_cube, region_cube = _build_value_cube(df)
 
